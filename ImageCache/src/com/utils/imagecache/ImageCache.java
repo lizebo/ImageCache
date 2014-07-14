@@ -1,0 +1,225 @@
+package com.utils.imagecache;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.ref.SoftReference;
+import java.math.BigInteger;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
+import java.util.Map;
+import android.graphics.Bitmap.CompressFormat;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.util.Log;
+import android.util.LruCache;
+
+public class ImageCache {
+	private final static String TAG = ImageCache.class.getName();
+	private final static int MaxSize = 64;
+
+	private volatile static ImageCache imageCache = null;
+
+	public static ImageCache getImageCache() {
+		if (imageCache == null) {
+			synchronized (ImageCache.class) {
+				if (imageCache == null) {
+					imageCache = new ImageCache();
+					loadFileCache();
+				}
+			}
+		}
+		return imageCache;
+	}
+
+	private File dir;
+
+	private static ImageMemoryCache memoryCache;
+	private static Map<String, File> diskCache = new HashMap<String, File>();
+
+	private ImageCache() {
+		memoryCache = new ImageMemoryCache(MaxSize);
+		try {
+			dir = ImageStore.getCachedPath();
+		} catch (StorageException e) {
+			e.printStackTrace();
+
+		}
+	}
+
+	public synchronized Drawable get(String url) {
+		Drawable drawable = getFromMemory(url);
+		if (drawable == null) {
+			drawable = getFromDisk(url);
+		}
+		return drawable;
+	}
+
+	private Drawable getFromMemory(String url) {
+		Drawable drawable;
+		try {
+			drawable = (Drawable) memoryCache.get(url);
+		} catch (NullPointerException e) {
+			e.printStackTrace();
+			drawable = null;
+		}
+		if (drawable != null) {
+			return drawable;
+		}
+		return null;
+	}
+
+	private Drawable getFromDisk(String url) {
+		String fileName = Url2Filename(url);
+		if (fileName == null) {
+			return null;
+		}
+		if (diskCache.containsKey(fileName)) {
+			try {
+				InputStream input = new FileInputStream(diskCache.get(fileName));
+				try {
+					Drawable drawable = Drawable.createFromStream(input, url);
+					if (drawable != null) {
+						memoryCache.put(url, drawable);
+					}
+					return drawable;
+				} finally {
+					input.close();
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+				Log.e(TAG, e.getMessage(), e);
+			}
+		}
+		return null;
+	}
+
+	private void putToMemory(String url, Drawable drawable) {
+		memoryCache.put(url, drawable);
+	}
+
+	public static String Url2Filename(String url) {
+		byte[] byteMD5 = null;
+		try {
+			MessageDigest md5 = MessageDigest.getInstance("MD5");
+
+			md5.update(url.getBytes());
+			byteMD5 = md5.digest();
+		} catch (NoSuchAlgorithmException e) {
+			// TODO
+		}
+		return new BigInteger(byteMD5).toString(16);
+	}
+
+	private void putToDisk(String url, Drawable drawable) throws IOException {
+		String fileName = Url2Filename(url);
+		if (fileName == null) {
+			throw new IOException("??????????????????");
+		}
+		File file = new File(dir, fileName);
+		OutputStream output = new FileOutputStream(file);
+		try {
+			((BitmapDrawable) drawable).getBitmap().compress(
+					CompressFormat.PNG, 100, output);
+			output.flush();
+			diskCache.put(fileName, file);
+		} finally {
+			output.close();
+		}
+	}
+
+	public static void loadFileCache() {
+		File img;
+		try {
+			img = ImageStore.getCachedPath();
+			if (img.exists()) {
+				if (img.isDirectory()) {
+					for (File file : img.listFiles()) {
+						diskCache.put(file.getName(), file);
+					}
+				}
+			}
+		} catch (StorageException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+	}
+
+	public synchronized void put(String url, Drawable drawable) {
+		putToMemory(url, drawable);
+	}
+
+	public synchronized void clearImageCache() {
+		File img;
+		// clear cached
+		try {
+			img = ImageStore.getCachedPath();
+			if (img.exists()) {
+				if (img.isDirectory()) {
+					for (File file : img.listFiles()) {
+						file.delete();
+					}
+				}
+			}
+		} catch (StorageException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} finally {
+			diskCache.clear();
+		}
+		try {
+			img = ImageStore.getTempPath();
+			if (img.exists()) {
+				if (img.isDirectory()) {
+					for (File file : img.listFiles()) {
+						file.delete();
+					}
+				}
+			}
+		} catch (StorageException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		// clear cached/drafts
+		try {
+			img = ImageStore.getDraftPath();
+			if (img.exists()) {
+				if (img.isDirectory()) {
+					for (File file : img.listFiles()) {
+						file.delete();
+					}
+				}
+			}
+		} catch (StorageException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+
+	}
+
+	class ImageMemoryCache extends LruCache<String, Drawable> {
+
+		public ImageMemoryCache(int maxSize) {
+			super(maxSize);
+			// TODO Auto-generated constructor stub
+		}
+
+		@Override
+		protected void entryRemoved(boolean evicted, String key,
+				Drawable oldValue, Drawable newValue) {
+			// TODO Auto-generated method stub
+			super.entryRemoved(evicted, key, oldValue, newValue);
+			try {
+				putToDisk(key, oldValue);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+
+	}
+}
